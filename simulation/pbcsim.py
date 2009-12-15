@@ -22,6 +22,8 @@ from Bio.Alphabet import SingleLetterAlphabet
 from pysqlite2 import dbapi2 as sqlite3
 
 
+# python pbcsim.py -i 'Kressetal_psbA-trnH_records.fa' -o 'data.fsa' -d 'psbA-trnH.sqlite' -c 10
+
 def interface():
     '''Command-line interface'''
     usage = "usage: %prog [options]"
@@ -35,7 +37,7 @@ def interface():
     help='Path to the file to hold our results', \
     metavar='FILE')
     p.add_option('--database', '-d', dest = 'database', action='store', \
-    type='string', default = 'roots.sqlite', \
+    type='string', default = 'my_db.sqlite', \
     help='Path to the database to hold our results', \
     metavar='FILE')
     p.add_option('--sample', '-s', dest = 'sample', action='store', \
@@ -48,7 +50,7 @@ def interface():
     likely to "draw" DNA from the root pool')
     p.add_option('--cores', '-c', dest = 'cores', action='store', \
     type='int', default = 96,
-    help='The (total) number of cores samples')
+    help='The (total) number of cores sampled')
     p.add_option('--reads', '-r', dest = 'reads', action='store', \
     type='int', default = 1000,
     help='The (total) number of reads per core')
@@ -72,7 +74,7 @@ def species_per_core(mean, sd, count):
     return abs(numpy.random.normal(mean, sd, count).round())
 
 def species_sampler(handle, sample):
-    '''randomly select some sequences from a fasta file'''
+    '''randomly select some sequences (uniform) from a fasta file'''
     #pdb.set_trace()
     lines = length(handle)
     rsample = random.sample(xrange(lines), int(sample))
@@ -242,7 +244,7 @@ def insert_read_row(c, core_index, individual_index, spp, reads, h_error, s_erro
 
 def write_reads(i, side, fsa, core_index, individual_index, spp, reads, h_error, s_error):
     '''generator to hold the sequence reads for efficient writing'''
-    header = '%s_%s_%s' % (core_index, spp.replace(' ','_'), side)
+    header = '%s_%s_%s_%s' % (core_index, individual_index, spp.replace(' ','_'), side)
     yield SeqRecord(reads[i], id = header, name = header, description = header)
 
 def main():
@@ -255,11 +257,13 @@ def main():
     tables(c)
     # commit the additions
     con.commit()
-    # create a file for the generated sequence reads
-    fsa = open(options.output, 'w')
     # generate some counts of species in each virtual root core
     cores = species_per_core(options.sample, options.sample_sd, options.cores)
+    #pdb.set_trace()
     for core_index, core in enumerate(cores):
+        # create a file for the generated sequence reads
+        outp = 'core-%s-%s' % (core_index, options.output)
+        fsa = open(outp, 'w')
         #pdb.set_trace()
         # randomly select some sequences from the group that will be in our virtual
         # soil core
@@ -267,7 +271,7 @@ def main():
         # use a dirichlet to generate random relative frequencies for the roots
         # in the virtual soil core
         #pdb.set_trace()
-        core_true_freq = root_freq(core, options.reads)
+        core_true_freq = root_freq(core, options.reads/2)
         # since adding DNA to PCR reactions is basically a sampling process,
         # recreate that process by sampling the available pool of species - i,e.
         # we are probably going to drop some low-count species here, at which we're
@@ -279,9 +283,7 @@ def main():
         # we know that the PCR and sequencing processes entail incorporation of
         # some error to each read.  Roche 454 would tell us that it's 1%
         # cumulative from their E. coli work (per Roche rep.) so here, we're going
-        # to
-        #
-        # create PCR and Sequencing error instances
+        # to create PCR and Sequencing error instances
         pcr_error = Error(rate = 2.6e-5)
         sequencing_error = Error(h_length = 3, h_rate = 0.15, rate = 0.01)
         # error rates for each error type are held in:
@@ -303,7 +305,7 @@ def main():
             pcr_seq = pcr_error.other(record.seq)
             #pdb.set_trace()
             # get read lengths for a particular fragment from both ends
-            reads = read_lengths(pcr_seq, 407.5, 126.1)
+            reads = read_lengths(pcr_seq, 400, 50)
             # add some error to those reads
             reads = sequencing_error.homopolymer(reads[0]), sequencing_error.homopolymer(reads[1])
             h_error = sequencing_error.homo_error_overall[-2:]
@@ -321,8 +323,10 @@ def main():
         all_error = ? WHERE id = ?''', (h_err_over, s_err_over, a_err_over, core_index))
         con.commit()
         SeqIO.write(iterator, fsa, "fasta")
-        pdb.set_trace()
-    cur.close()
+        # close the file
+        fsa.close()
+        #pdb.set_trace()
+    c.close()
     con.close()
         
     pdb.set_trace()
