@@ -9,6 +9,7 @@ Copyright (c) 2009 Brant Faircloth. All rights reserved.
 
 import pdb
 import re
+import os
 import sys
 import numpy 
 import random
@@ -58,6 +59,10 @@ def interface():
     if not options.input:
         p.print_help()
         sys.exit(2)
+    if ':' in options.input:
+        options.input = options.input.split(':')
+    else:
+        options.input = [options.input]
     return options, arg
 
 def length(handle):
@@ -73,18 +78,36 @@ def species_per_core(mean, sd, count):
     #pdb.set_trace()
     return abs(numpy.random.normal(mean, sd, count).round())
 
-def species_sampler(handle, sample):
-    '''randomly select some sequences (uniform) from a fasta file'''
+def sequence_dictionary(files, remove=True):
+    '''generate a dictionary holding sequence data from multiple files'''
+    # read input files into dicts indexed by locus and sp.
+    all_seqs = {}
+    for f in files:
+        for record in SeqIO.parse(open(f, 'r'), 'fasta'):
+            sp = ' '.join(record.description.split('|')[-1].strip(' ').split(' ')[0:2])
+            if sp not in all_seqs.keys():
+                all_seqs[sp] = {f:record}
+            else:
+                all_seqs[sp].update({f:record})
+    # remove species lacking both sequences
+    if remove:
+        s_count = len(all_seqs)
+        for sp in all_seqs.keys():
+            if len(all_seqs[sp]) != len(files):
+                del all_seqs[sp]
+    print 'removed', s_count - len(all_seqs), 'sequences w/o all barcodes'
+    return all_seqs
+
+def species_sampler(seq_dict, sample):
+    '''randomly select some sequences (uniform) from a sequence dict'''
+    # sample a list of numbers w/o replacement
+    rsample = random.sample(xrange(len(seq_dict)), int(sample))
+    seq_sample = {}
+    for seq_index, seq in enumerate(seq_dict):
+        if seq_index in rsample:
+            seq_sample[seq] = seq_dict[seq]
     #pdb.set_trace()
-    lines = length(handle)
-    rsample = random.sample(xrange(lines), int(sample))
-    count = 0
-    random_sequences = ()
-    for record in SeqIO.parse(open(handle, 'r'), 'fasta'):
-        if count in rsample:
-            random_sequences += (record,)
-        count += 1
-    return random_sequences
+    return seq_sample
 
 def root_freq(sample, roots):
     '''compute the true frequency of sequences in solution'''
@@ -213,16 +236,19 @@ def tables(c):
     except:
         pass
     c.execute('''create table cores (
-    id int PRIMARY KEY,
+    id int,
+    locus text,
     mid_tag text,
     true_count int,
     sample_count int,
     homo_error real,
     other_error real,
-    all_error real
+    all_error real,
+    PRIMARY KEY(id, locus)
     )''')
     c.execute('''create table reads (
     id int,
+    locus text,
     indiv_id int,
     side text,
     spp text,
@@ -230,22 +256,29 @@ def tables(c):
     homo_error real,
     other_error real,
     all_error real,
-    FOREIGN KEY(id) REFERENCES cores(id)
-    )''')
+    FOREIGN KEY(id, locus) REFERENCES cores(id, locus)
+    )''')      
+    # removed FOREIGN KEY(id) REFERENCES cores(id)
 
-def insert_read_row(c, core_index, individual_index, spp, reads, h_error, s_error):
+def insert_read_row(c, core_index, locus, individual_index, spp, reads, h_error, s_error):
     '''docstring for insert_read_row'''
     for i, side in enumerate(['l','r']):
-        c.execute('''INSERT INTO reads (id, indiv_id, side, spp, read_length, 
-        homo_error, other_error, all_error) VALUES (?,?,?,?,?,?,?,?)''', 
-        (core_index, individual_index, side, spp, len(reads[i]), 
+        c.execute('''INSERT INTO reads (id, locus, indiv_id, side, spp, read_length, 
+        homo_error, other_error, all_error) VALUES (?,?,?,?,?,?,?,?,?)''', 
+        (core_index, locus, individual_index, side, spp, len(reads[i]), 
         h_error[i].round(3), s_error[i].round(3), 
         (h_error[i]+s_error[i]).round(3)))
 
-def write_reads(i, side, fsa, core_index, individual_index, spp, reads, h_error, s_error):
+def write_reads(i, locus, side, fsa, core_index, individual_index, spp, reads, h_error, s_error):
     '''generator to hold the sequence reads for efficient writing'''
-    header = '%s_%s_%s_%s' % (core_index, individual_index, spp.replace(' ','_'), side)
+    header = '%s_%s_%s_%s_%s' % (core_index, individual_index, spp.replace(' ','_'), side, locus)
     yield SeqRecord(reads[i], id = header, name = header, description = header)
+
+def core_map(core_species):
+    m = {}
+    for i, sp in enumerate(core_species):
+        m[i] = sp
+    return m
 
 def main():
     # get and parse our command-line options
@@ -257,20 +290,23 @@ def main():
     tables(c)
     # commit the additions
     con.commit()
+    # create a dictionary to hold the sequence of the input files
+    sequence_dict = sequence_dictionary(options.input)
     # generate some counts of species in each virtual root core
     cores = species_per_core(options.sample, options.sample_sd, options.cores)
-    #pdb.set_trace()
     for core_index, core in enumerate(cores):
         # create a file for the generated sequence reads
         outp = 'core-%s-%s' % (core_index, options.output)
         fsa = open(outp, 'w')
         #pdb.set_trace()
-        # randomly select some sequences from the group that will be in our virtual
-        # soil core
-        core_species = species_sampler(options.input, core)
+        # randomly select some species sequence, at each loci that will be in 
+        # our virtual soil core
+        core_species = species_sampler(sequence_dict, core)
+        core_species_map = core_map(core_species)
         # use a dirichlet to generate random relative frequencies for the roots
-        # in the virtual soil core
-        #pdb.set_trace()
+        # in the virtual soil core.
+        # WARNING: This assumes that we get perfectly equal representation of 
+        #both loci in the virtual core
         core_true_freq = root_freq(core, options.reads/2)
         # since adding DNA to PCR reactions is basically a sampling process,
         # recreate that process by sampling the available pool of species - i,e.
@@ -280,56 +316,63 @@ def main():
         # Similarly, our work in the lab, separating roots from soil will also
         # mimic a sampling process (perhaps not as random)
         core_sample, core_sample_freq = dna_sample(core_true_freq, options.sampling_freq)
-        # we know that the PCR and sequencing processes entail incorporation of
-        # some error to each read.  Roche 454 would tell us that it's 1%
-        # cumulative from their E. coli work (per Roche rep.) so here, we're going
-        # to create PCR and Sequencing error instances
-        pcr_error = Error(rate = 2.6e-5)
-        sequencing_error = Error(h_length = 3, h_rate = 0.15, rate = 0.01)
-        # error rates for each error type are held in:
-        # self.homo_error_relative (this is the rate at each homo run)
-        # self.homo_error_overall (this is the homo error rate, over all bases)
-        # self.other_error_overall (this is the non-homo error rate, over all bp)
-        #pdb.set_trace()
-        c.execute('''INSERT INTO cores (id, true_count, sample_count) VALUES 
-        (?,?,?)''', (core_index, int(sum(core_true_freq > 0)), 
-        int(sum(core_sample_freq > 0))))
+        # create the iterator to hold our sequence data
         iterator = itertools.chain()
-        for individual_index, individual in enumerate(core_sample):
-            # get the the voucher read for the species
-            record  = core_species[int(individual)]
-            # add some error to the PCR sequences.  This is likely to be a small
-            # rate and this is a vastly oversimplified approximation of a "real"
-            # error generation process (which would be exponenential)
-            # TODO: make process more real
-            pcr_seq = pcr_error.other(record.seq)
+        # do this twice, across each locus type???
+        #pdb.set_trace()
+        for locus in options.input:
+            # we know that the PCR and sequencing processes entail incorporation of
+            # some error to each read.  Roche 454 would tell us that it's 1%
+            # cumulative from their E. coli work (per Roche rep.) so here, we're going
+            # to create PCR and Sequencing error instances.
+            #
+            # error rates for each error type are held in:
+            # self.homo_error_relative (this is the rate at each homo run)
+            # self.homo_error_overall (this is the homo error rate, over all bases)
+            # self.other_error_overall (this is the non-homo error rate, over all bp)
+            pcr_error = Error(rate = 2.6e-5)
+            sequencing_error = Error(h_length = 3, h_rate = 0.15, rate = 0.01)
+            # insert the primary virtual core record in the dbase
+            c.execute('''INSERT INTO cores (id, locus, true_count, sample_count) VALUES 
+            (?,?,?,?)''', (core_index, os.path.basename(locus), int(sum(core_true_freq > 0)), 
+            int(sum(core_sample_freq > 0))))
+            # insert the individual reads record to the dbase, referencing
+            # the core and locus, which are the primary keys.
+            for individual_index, individual in enumerate(core_sample):
+                # get the species name of the read
+                sp_name = core_species_map[individual]
+                # get the the voucher read for the species
+                record  = core_species[sp_name][locus]
+                # add some error to the PCR sequences.  This is likely to be a small
+                # rate and this is a vastly oversimplified approximation of a "real"
+                # error generation process (which would be exponenential)
+                # TODO: make process more real
+                pcr_seq = pcr_error.other(record.seq)
+                #pdb.set_trace()
+                # get read lengths for a particular fragment from both ends
+                reads = read_lengths(pcr_seq, 400, 50)
+                # add some error to those reads
+                reads = sequencing_error.homopolymer(reads[0]), sequencing_error.homopolymer(reads[1])
+                h_error = sequencing_error.homo_error_overall[-2:]
+                reads = sequencing_error.other(reads[0]), sequencing_error.other(reads[1])
+                s_error = sequencing_error.other_error_overall[-2:]
+                insert_read_row(c, core_index, os.path.basename(locus), individual_index, sp_name, reads, h_error, s_error)
+                for i, side in enumerate(['l','r']):
+                    iterator = itertools.chain(iterator, write_reads(i, os.path.basename(locus), side, fsa, core_index, individual_index, sp_name, reads, h_error, s_error))
             #pdb.set_trace()
-            # get read lengths for a particular fragment from both ends
-            reads = read_lengths(pcr_seq, 400, 50)
-            # add some error to those reads
-            reads = sequencing_error.homopolymer(reads[0]), sequencing_error.homopolymer(reads[1])
-            h_error = sequencing_error.homo_error_overall[-2:]
-            reads = sequencing_error.other(reads[0]), sequencing_error.other(reads[1])
-            s_error = sequencing_error.other_error_overall[-2:]
-            # get the spp name
-            spp = ' '.join(record.description.split('|')[4].split(' ')[1:3])
-            insert_read_row(c, core_index, individual_index, spp, reads, h_error, s_error)
-            for i, side in enumerate(['l','r']):
-                iterator = itertools.chain(iterator, write_reads(i, side, fsa, core_index, individual_index, spp, reads, h_error, s_error))
-        h_err_over = numpy.mean(sequencing_error.homo_error_overall).round(3)
-        s_err_over = numpy.mean(sequencing_error.other_error_overall).round(3)
-        a_err_over = numpy.mean(sequencing_error.homo_error_overall + sequencing_error.other_error_overall).round(3)
-        c.execute('''UPDATE cores set homo_error = ?, other_error = ?, 
-        all_error = ? WHERE id = ?''', (h_err_over, s_err_over, a_err_over, core_index))
-        con.commit()
+            h_err_over = numpy.mean(sequencing_error.homo_error_overall).round(5)
+            s_err_over = numpy.mean(sequencing_error.other_error_overall).round(5)
+            a_err_over = numpy.mean(sequencing_error.homo_error_overall + sequencing_error.other_error_overall).round(3)
+            c.execute('''UPDATE cores set homo_error = ?, other_error = ?, 
+            all_error = ? WHERE id = ? and locus = ?''', (h_err_over, s_err_over, a_err_over, core_index, os.path.basename(locus)))
         SeqIO.write(iterator, fsa, "fasta")
         # close the file
         fsa.close()
         #pdb.set_trace()
     c.close()
-    con.close()
-        
-    pdb.set_trace()
+    con.commit()
+    con.close()  
+    #pdb.set_trace()
 
 if __name__ == '__main__':
     main()
