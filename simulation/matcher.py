@@ -15,6 +15,8 @@ import numpy
 import optparse
 import cStringIO
 import subprocess
+import multiprocessing
+from Queue import Empty
 from Bio import SeqIO
 from Bio import pairwise2
 from Bio.Blast import NCBIXML
@@ -48,6 +50,8 @@ def interface():
     metavar='FILE')
     p.add_option('--length', '-l', dest = 'length', action='store', \
     type='int', default = 100, help='The minimum length of reads to process')
+    p.add_option('--nproc', '-n', dest = 'nproc', action='store', \
+    type='int', default = 1, help='The number of processing cores to run')
     (options,arg) = p.parse_args()
     if not options.input:
         p.print_help()
@@ -74,23 +78,12 @@ def record_printer(record, best_match):
     print '\n'
 
 
-def main():
-    path_filter = re.compile(".fsa$", re.IGNORECASE)
-    # get and parse our command-line options
-    options, args = interface()
-    db = options.blast
-    exe = options.executable
-    #db = '/Users/bcf/python/roots/simulation/blast/voucher_trnh'
-    #exe = '/usr/local/ncbi/blast/bin/blastn'
-    # connect to a dbase
-    #pdb.set_trace()
-    con = sqlite3.connect(options.database)
-    c = con.cursor()
-    # try regex search first to reduce time??
-    file_count = 0
-    metagroup = {}
-    outinfo = open('summary.out.txt','w')
-    for f in [f for f in os.listdir(options.input) if path_filter.search(f)]:
+def worker(input, output, options, db, exe):
+    for f in iter(input.get, 'STOP'):
+        # make per-process connection to the dbase
+        con = sqlite3.connect(options.database)
+        c = con.cursor()
+        # get the core name
         core_name = f.split('-')[1]
         infile = os.path.join(os.getcwd(), f)
         out, err = subprocess.Popen("%s -query %s -db %s -evalue 1e-50 -dust 'yes' -max_target_seqs 5 -outfmt 5" % (exe, infile, db), shell=True, stdout=subprocess.PIPE, stderr = subprocess.PIPE).communicate()
@@ -124,7 +117,7 @@ def main():
                         else:
                             problems[locus].update({k:1})
         # track problems on a per-core basis
-        metagroup[file_count] = problems
+        #metagroup[core_name] = problems
         # get the set of known species
         known = get_known_sp(c, core_name)
         # determine the intersection of the two loci - this should be sp.
@@ -132,20 +125,48 @@ def main():
         inferred = loci['psba'].intersection(loci['rbcl'])
         # show symmetric difference btw. known and inferred
         prnted = False
+        results = []
         for i in known.intersection(inferred):
-            outinfo.write('%s\t%s\t%s\n' % (core_name, i, ''))
+            results.append([core_name, i, ''])
         for i in known.difference(inferred):
-            outinfo.write('%s\t%s\t%s\n' % (core_name, i, '-'))
+            results.append([core_name, i, '-'])
         for i in inferred.difference(known):
-            outinfo.write('%s\t%s\t%s\n' % (core_name, i, '+'))
-        #pdb.set_trace()
-        #missed = known.symmetric_difference(inferred)
-        file_count += 1
-    outinfo.close()
-    
-# to get a dict of seq by name:
-#for record in SeqIO.parse(open('Kressetal_psbA-trnH_records.fa', 'r'), 'fasta'):
-#    d[' '.join(record.description.split('|')[-1].strip(' ').split(' ')[0:2])] = record
+            results.append([core_name, i, '+'])
+        output.put(results)     
+
+def main():
+    path_filter = re.compile(".fsa$", re.IGNORECASE)
+    # get and parse our command-line options
+    options, args = interface()
+    db = options.blast
+    exe = options.executable
+    file_count = 0
+    metagroup = {}
+    #outinfo = open('summary.out.txt','w')
+    files = [f for f in os.listdir(options.input) if path_filter.search(f)]
+    my = []
+    n_procs = options.nproc
+    task_queue = multiprocessing.Queue()
+    done_queue = multiprocessing.Queue()
+    # submit tasks
+    for f in files:
+        task_queue.put(f)
+    # start some processes
+    for i in range(n_procs):
+        multiprocessing.Process(target=worker, args = (task_queue, done_queue, options, db, exe)).start()
+    # get and print results
+    print 'Unordered resutls:'
+    for i in range(len(files)):
+        my.append(done_queue.get())
+    #tell child processes to stop
+    for i in range(n_procs):
+        task_queue.put('STOP')
+    outfile = open('summary.out.txt','w')
+    for core in my:
+        for r in core:
+            outfile.write('%s\t%s\t%s\n' % (r[0], r[1], r[2]))
+    outfile.close()
+    pdb.set_trace()
 
 if __name__ == '__main__':
     main()
