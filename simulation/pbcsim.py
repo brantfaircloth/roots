@@ -313,12 +313,13 @@ def main():
         # we are probably going to drop some low-count species here, at which we're
         # interesting in looking
         #
+        # Currently we are not dropping many/all, so that's not the problem
+        #
         # Similarly, our work in the lab, separating roots from soil will also
         # mimic a sampling process (perhaps not as random)
         core_sample, core_sample_freq = dna_sample(core_true_freq, options.sampling_freq)
         # create the iterator to hold our sequence data
         iterator = itertools.chain()
-        # do this twice, across each locus type???
         #pdb.set_trace()
         for locus in options.input:
             # we know that the PCR and sequencing processes entail incorporation of
