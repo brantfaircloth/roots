@@ -21,9 +21,11 @@ from Bio.SeqRecord import SeqRecord
 from Bio.Alphabet import SingleLetterAlphabet
 # make sure we use sqlite supporting foreign keys
 from pysqlite2 import dbapi2 as sqlite3
+# use rpy for a quicky skew-normal distribution
+import rpy2.robjects as robjects
 
 
-# python pbcsim.py -i 'Kressetal_psbA-trnH_records.fa' -o 'data.fsa' -d 'psbA-trnH.sqlite' -c 10
+# python ../pbcsim.py -i ../Kressetal_psbA-trnH_records_bcf.fa:../Kressetal_rbcL_records_bcf.fa -o 'data.fsa' -d 'psbA-trnH.sqlite' -c 10
 
 def interface():
     '''Command-line interface'''
@@ -193,11 +195,12 @@ class Error():
         return Seq(''.join(seq_list), SingleLetterAlphabet())
 
 
-def read_lengths(seq, mean, sd):
+def read_lengths(robj, seq, mean, sd, skew = -5):
     '''sample from the entire length of the read, in both
     directions, returning the forward (potentially partial) read and the
     reverse (potentially partial) read (the revcomp)'''
-    l,r = numpy.random.normal(mean, sd, 2).round()
+    #l,r = numpy.random.normal(mean, sd, 2).round()
+    l,r = robj.rsn(n=2, location=mean, scale = sd, shape = skew)
     return (seq[:int(l)], seq[len(seq)-int(r):].reverse_complement())
 
 
@@ -281,6 +284,9 @@ def core_map(core_species):
     return m
 
 def main():
+    # setup our R object
+    robj = robjects.r
+    robj.library('sn')
     # get and parse our command-line options
     options, args = interface()
     # create a dbase
@@ -299,7 +305,7 @@ def main():
         outp = 'core-%s-%s' % (core_index, options.output)
         fsa = open(outp, 'w')
         #pdb.set_trace()
-        # randomly select some species sequence, at each loci that will be in 
+        # randomly select some species sequence, at each locus that will be in 
         # our virtual soil core
         core_species = species_sampler(sequence_dict, core)
         core_species_map = core_map(core_species)
@@ -313,13 +319,12 @@ def main():
         # we are probably going to drop some low-count species here, at which we're
         # interesting in looking
         #
-        # Currently we are not dropping many/all, so that's not the problem
-        #
         # Similarly, our work in the lab, separating roots from soil will also
         # mimic a sampling process (perhaps not as random)
         core_sample, core_sample_freq = dna_sample(core_true_freq, options.sampling_freq)
         # create the iterator to hold our sequence data
         iterator = itertools.chain()
+        # do this twice, across each locus type???
         #pdb.set_trace()
         for locus in options.input:
             # we know that the PCR and sequencing processes entail incorporation of
@@ -351,7 +356,7 @@ def main():
                 pcr_seq = pcr_error.other(record.seq)
                 #pdb.set_trace()
                 # get read lengths for a particular fragment from both ends
-                reads = read_lengths(pcr_seq, 400, 50)
+                reads = read_lengths(robj, pcr_seq, 400, 90)
                 # add some error to those reads
                 reads = sequencing_error.homopolymer(reads[0]), sequencing_error.homopolymer(reads[1])
                 h_error = sequencing_error.homo_error_overall[-2:]
