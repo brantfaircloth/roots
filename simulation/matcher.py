@@ -25,7 +25,7 @@ from Bio.Blast import NCBIStandalone
 from pysqlite2 import dbapi2 as sqlite3
 
 
-# python seq_matcher.py -i './' -d 'psbA-trnH.sqlite'
+# python ../matcher.py -i ./ -d psbA-trnH.sqlite -e /usr/local/ncbi/blast/bin/blastn -b ../blast/voucher_trnh_rbcl -l 100 -n 6
 
 
 def interface():
@@ -125,14 +125,28 @@ def worker(input, output, options, db, exe):
         inferred = loci['psba'].intersection(loci['rbcl'])
         # show symmetric difference btw. known and inferred
         prnted = False
-        results = []
+        results = [[],[]]
+        ####
+        # Species Level
+        ####
         for i in known.intersection(inferred):
-            results.append([core_name, i, ''])
+            results[0].append([core_name, i, ''])
         for i in known.difference(inferred):
-            results.append([core_name, i, '-'])
+            results[0].append([core_name, i, '-'])
         for i in inferred.difference(known):
-            results.append([core_name, i, '+'])
-        output.put(results)     
+            results[0].append([core_name, i, '+'])
+        #####
+        # Genus Level  
+        ####
+        known_genus = set([sp.split(' ')[0] for sp in known])
+        inferred_genus = set([sp.split(' ')[0] for sp in inferred])
+        for i in known_genus.intersection(inferred_genus):
+            results[1].append([core_name, i, ''])
+        for i in known_genus.difference(inferred_genus):
+            results[1].append([core_name, i, '-'])
+        for i in inferred_genus.difference(known_genus):
+            results[1].append([core_name, i, '+'])
+        output.put(results)
 
 def main():
     path_filter = re.compile(".fsa$", re.IGNORECASE)
@@ -155,18 +169,24 @@ def main():
     for i in range(n_procs):
         multiprocessing.Process(target=worker, args = (task_queue, done_queue, options, db, exe)).start()
     # get and print results
-    print 'Unordered resutls:'
+    #print 'Unordered resutls:'
     for i in range(len(files)):
         my.append(done_queue.get())
     #tell child processes to stop
     for i in range(n_procs):
         task_queue.put('STOP')
-    outfile = open('summary.out.txt','w')
+    outfile = open('species.out.txt','w')
+    #pdb.set_trace()
     for core in my:
-        for r in core:
+        for r in core[0]:
             outfile.write('%s\t%s\t%s\n' % (r[0], r[1], r[2]))
     outfile.close()
-    pdb.set_trace()
+    outfile = open('genus.out.txt','w')
+    for core in my:
+        for r in core[1]:
+            outfile.write('%s\t%s\t%s\n' % (r[0], r[1], r[2]))
+    outfile.close()
+    
 
 if __name__ == '__main__':
     main()
