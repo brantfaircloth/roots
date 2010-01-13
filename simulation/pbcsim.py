@@ -25,7 +25,11 @@ from pysqlite2 import dbapi2 as sqlite3
 import rpy2.robjects as robjects
 
 
-# python ../pbcsim.py -i ../Kressetal_psbA-trnH_records_bcf.fa:../Kressetal_rbcL_records_bcf.fa -o 'data.fsa' -d 'psbA-trnH.sqlite' -c 10
+## For a random sample of species:
+# python ../pbcsim.py -i ../Kressetal_psbA-trnH_records_bcf.fa:../Kressetal_rbcL_records_bcf.fa -o 'data.fsa' -d 'psbA-trnH.sqlite' -c 10 -r 500
+
+## For a representative sample of species
+# python ../pbcsim.py -i ../Kressetal_psbA-trnH_records_bcf.fa:../Kressetal_rbcL_records_bcf.fa -o 'data.fsa' -d 'psbA-trnH.sqlite' -c 10 -p True -m 5 -r 500
 
 def interface():
     '''Command-line interface'''
@@ -55,8 +59,23 @@ def interface():
     type='int', default = 96,
     help='The (total) number of cores sampled')
     p.add_option('--reads', '-r', dest = 'reads', action='store', \
-    type='int', default = 1000,
+    type='int', default = 500,
     help='The (total) number of reads per core')
+    p.add_option('--picker', '-p', dest = 'picker', action='store', \
+    type='string', default = 'False',
+    help='Pick samples from a database')
+    p.add_option('--meters', '-m', dest = 'meters', action='store', \
+    type='float', default = 5.0,
+    help='Distance from the point to sample')
+    p.add_option('--average', '-a', dest = 'average', action='store', \
+    type='int', default = 400,
+    help='Average read length')
+    p.add_option('--spread', '-e', dest = 'spread', action='store', \
+    type='int', default = 50,
+    help='Average read length')
+    p.add_option('--skew', '-k', dest = 'skew', action='store', \
+    type='int', default = -5,
+    help='Skew of average read length')
     (options,arg) = p.parse_args()
     if not options.input:
         p.print_help()
@@ -283,10 +302,48 @@ def core_map(core_species):
         m[i] = sp
     return m
 
+def rect_dist(input, dist=2.5):
+    return numpy.vstack((input-dist, input+dist))  
+
+def species_picker(seq_dict, species, missing):
+    '''return a shortened dictionary for the species list passed - in keeping
+    with the species_sampler format'''
+    new = {}
+    for sp in species:
+        try:
+            new[sp[0]] = seq_dict[sp[0]]
+        except:
+            #pdb.set_trace()
+            #pass
+            if sp[0] not in missing.keys():
+                missing[sp[0]] = 1
+            else:
+                missing[sp[0]] += 1
+            #print '%s not in barcodes' % sp[0]
+    return new, missing
+
+def species_getter(bcur, dist):
+    '''get species surrounding a point dist m away where the point is 
+    indexed by x and y coordinates'''
+    # choose a random (x) point in space from [0,999)
+    x = numpy.random.uniform(low=0, high=1000, size=1)
+    # choose a random (y) point in space from [0,999)
+    y = numpy.random.uniform(low=0, high=500, size=1)
+    # get x points ± dist from x
+    xs = rect_dist(x, dist)
+    # get y points ± dist from y
+    ys = rect_dist(y, dist)
+    results = []
+    bcur.execute('''SELECT distinct(Latin) FROM plot where gx 
+        between ? and ? and gy between ? and ? and Status = "alive"''', \
+        (xs[0][0], xs[1][0], ys[0][0], ys[1][0]))
+    return bcur.fetchall()
+
 def main():
     # setup our R object
     robj = robjects.r
     robj.library('sn')
+    robj.options(warn=-1)
     # get and parse our command-line options
     options, args = interface()
     # create a dbase
@@ -299,15 +356,28 @@ def main():
     # create a dictionary to hold the sequence of the input files
     sequence_dict = sequence_dictionary(options.input)
     # generate some counts of species in each virtual root core
-    cores = species_per_core(options.sample, options.sample_sd, options.cores)
+    if options.picker == 'False':
+        cores = species_per_core(options.sample, options.sample_sd, options.cores)
+    else:
+        cores = range(options.cores)
+        # connect to the database from which we will be picking
+        bci = sqlite3.connect('../BCI2005.sqlite')
+        bcur = bci.cursor()
+        missing_species = {}
     for core_index, core in enumerate(cores):
         # create a file for the generated sequence reads
         outp = 'core-%s-%s' % (core_index, options.output)
         fsa = open(outp, 'w')
         #pdb.set_trace()
-        # randomly select some species sequence, at each locus that will be in 
-        # our virtual soil core
-        core_species = species_sampler(sequence_dict, core)
+        if options.picker == 'False':
+            # randomly select some species sequence, at each locus that will be in 
+            # our virtual soil core
+            core_species = species_sampler(sequence_dict, core)
+        else:
+            species = species_getter(bcur, options.meters)
+            # get a count of the species in the core
+            core_species, missing_species = species_picker(sequence_dict, species, missing_species)
+            core = len(core_species)
         core_species_map = core_map(core_species)
         # use a dirichlet to generate random relative frequencies for the roots
         # in the virtual soil core.
@@ -346,7 +416,10 @@ def main():
             # the core and locus, which are the primary keys.
             for individual_index, individual in enumerate(core_sample):
                 # get the species name of the read
-                sp_name = core_species_map[individual]
+                try:
+                    sp_name = core_species_map[individual]
+                except:
+                    pdb.set_trace()
                 # get the the voucher read for the species
                 record  = core_species[sp_name][locus]
                 # add some error to the PCR sequences.  This is likely to be a small
@@ -356,7 +429,7 @@ def main():
                 pcr_seq = pcr_error.other(record.seq)
                 #pdb.set_trace()
                 # get read lengths for a particular fragment from both ends
-                reads = read_lengths(robj, pcr_seq, 400, 90)
+                reads = read_lengths(robj, pcr_seq, options.average, options.spread, options.skew)
                 # add some error to those reads
                 reads = sequencing_error.homopolymer(reads[0]), sequencing_error.homopolymer(reads[1])
                 h_error = sequencing_error.homo_error_overall[-2:]
@@ -374,11 +447,21 @@ def main():
         SeqIO.write(iterator, fsa, "fasta")
         # close the file
         fsa.close()
-        #pdb.set_trace()
+        #pdb.set_trace()  
+    #pdb.set_trace()
+    params = open('simulation.params.txt','w')
+    params.write('%s' % options)
+    c.execute('''SELECT locus, avg(homo_error), avg(other_error), avg(all_error) from cores group by locus''')
+    averages = c.fetchall()
+    params.write('\n\nError Averages:\n\nlocus\tavg(homo_error)\tavg(other_error)\tavg(all_error)\n')
+    for a in averages:
+        params.write('%s\t%s\t%s\t%s\n' % (a[0],a[1],a[2],a[3]))
+    params.write('\n\nMissing Species:\n\n%s' % missing_species)
+    params.close()
     c.close()
     con.commit()
-    con.close()  
-    #pdb.set_trace()
+    con.close()
+    
 
 if __name__ == '__main__':
     main()
