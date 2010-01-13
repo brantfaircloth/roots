@@ -1,0 +1,25 @@
+About
+========================
+
+This directory contains pbcsim.py and matcher.py.
+
+pbcsim.py is used to generate a set of virtual soil cores containing random or
+representative (within X meters sample of roots) samples of species.  It also
+incorporates length variation to the resulting virtual "reads" we get,
+post-sequencing, in addition to incorporating sequencing error at a rate of
+approximately 1% (with higher emphasis on errors in homopolymer regions).  It
+outputs data in 2 places - flat fasta-files containing the virtual sequencing
+reads (which are simulated) returned and a SQLITE database that gives complete
+information for each virtual read, along with the actual error rate for each
+read and within each core.
+
+matcher.py is used to match the virtual reads from above to a voucher (BLAST)
+database containing reads of the species on which we are focused (in this
+instance those species from Kress et al. 2009).  It uses the results of this
+matching process (which is based on intersections of sets) to "determine" the
+contents of the virtual soil core.  These estimated contents are then compared
+to the actual contents of the soil core (in the SQLITE database) such that we
+can compute an error rate (i,e. how "correct" we are).
+
+Other files in sampling/* and simulation/* are helper scripts, not necessarily
+important for the functioning of the above scripts.
