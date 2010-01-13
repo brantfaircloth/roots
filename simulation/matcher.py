@@ -52,6 +52,8 @@ def interface():
     type='int', default = 100, help='The minimum length of reads to process')
     p.add_option('--nproc', '-n', dest = 'nproc', action='store', \
     type='int', default = 1, help='The number of processing cores to run')
+    p.add_option('--single', '-s', dest = 'single', action='store', \
+    type='string', default = None, help='If running a single locus, the locus to use')
     (options,arg) = p.parse_args()
     if not options.input:
         p.print_help()
@@ -121,8 +123,11 @@ def worker(input, output, options, db, exe):
         # get the set of known species
         known = get_known_sp(c, core_name)
         # determine the intersection of the two loci - this should be sp.
-        # present in both
-        inferred = loci['psba'].intersection(loci['rbcl'])
+        if options.single:
+            inferred = loci[options.single]
+        else:
+            # present in both
+            inferred = loci['psba'].intersection(loci['rbcl'])
         # show symmetric difference btw. known and inferred
         prnted = False
         results = [[],[]]
