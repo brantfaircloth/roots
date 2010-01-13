@@ -25,11 +25,13 @@ from pysqlite2 import dbapi2 as sqlite3
 import rpy2.robjects as robjects
 
 
-## For a random sample of species:
-# python ../pbcsim.py -i ../Kressetal_psbA-trnH_records_bcf.fa:../Kressetal_rbcL_records_bcf.fa -o 'data.fsa' -d 'psbA-trnH.sqlite' -c 10 -r 500
+## To generate a random sample of species:
+# python ../pbcsim.py -i ../Kressetal_psbA-trnH_records_bcf.fa:../Kressetal_rbcL_records_bcf.fa \
+# -o 'data.fsa' -d 'psbA-trnH.sqlite' -c 10 -r 500
 
-## For a representative sample of species
-# python ../pbcsim.py -i ../Kressetal_psbA-trnH_records_bcf.fa:../Kressetal_rbcL_records_bcf.fa -o 'data.fsa' -d 'psbA-trnH.sqlite' -c 10 -p True -m 5 -r 500
+## To generate a representative sample of species
+# python ../pbcsim.py -i ../Kressetal_psbA-trnH_records_bcf.fa:../Kressetal_rbcL_records_bcf.fa \
+# -o 'data.fsa' -d 'psbA-trnH.sqlite' -c 10 -p True -m 5 -r 500
 
 def interface():
     '''Command-line interface'''

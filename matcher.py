@@ -25,7 +25,17 @@ from Bio.Blast import NCBIStandalone
 from pysqlite2 import dbapi2 as sqlite3
 
 
-# python ../matcher.py -i ./ -d psbA-trnH.sqlite -e /usr/local/ncbi/blast/bin/blastn -b ../blast/voucher_trnh_rbcl -l 100 -n 6
+# USAGE:  python ../matcher.py -i ./ -d psbA-trnH.sqlite -e \
+# /usr/local/ncbi/blast/bin/blastn -b ../blast/voucher_trnh_rbcl -l 100 -n 6
+
+# This will run the script, use the psba-trnH database as the source of
+# information, use blastn in the stated directory, use the voucher sequence
+# directory at ../blast/voucher_trnh_rbcl, drop reads < 100 bp, and use 6
+# processing cores to do the job.
+
+# The psba-trnH database hold information on the COMPLETE contents of a
+# virtual soil core.  We also have our virtual core SAMPLE, which may or may
+# not match the COMPLETE contents 100%
 
 
 def interface():
